@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Nimble IRL</title>
+		<link rel="stylesheet" href="/css/style.css">
+		<link rel="stylesheet" href="/css/fork-awesome.min.css">
+		<script src="/js/vue.min.js"></script>
+	</head>
+
+	<body>
+		<div id="app">
+			<section class="section">
+				<p class="title">Nimble IRL</p>
+				<p class="subtitle">
+					<span class="has-text-danger mr-2" v-if="live_obs">
+						<i class="fa fa-circle"></i>
+						LIVE
+					</span>
+					<span class="has-text-danger mr-2" v-if="live_encoding">
+						<i class="fa fa-circle"></i>
+						ENCODING
+					</span>
+				</p>
+
+				<p>
+					<span>::</span>
+					<span class="has-text-grey">{{ status }}</span>
+				</p>
+
+				<div class="buttons are-small">
+					<button :class="streamEncodingButtonClasses" @click="toggleEncoding" :disabled="toggleWaiting">
+						<span class="icon"><i class="fa fa-circle"></i></span>
+						<span>{{ streamEncodingButtonText }}</span>
+					</button>
+					<button :class="streamOBSButtonClasses" @click="toggleOBS" :disabled="toggleWaiting">
+						<span class="icon"><i class="fa fa-dot-circle-o"></i></span>
+						<span>{{ streamOBSButtonText }}</span>
+					</button>
+					<button class="button is-small" @click="refreshAll">
+						<span class="icon"><i class="fa fa-refresh"></i></span>
+						<span>Refresh</span>
+					</button>
+				</div>
+
+				<label class="label">Scenes:</label>
+				<div class="buttons are-small">
+					<button v-for="scene in scenes" v-key="scene.sceneIndex" :class="{
+						'button': true,
+						'is-link': scene.sceneName == currentScene,
+					}" @click="setScene(scene.sceneName)">
+						{{ scene.sceneName }}
+					</button>
+				</div>
+
+				<div class="buttons are-small">
+					<button class="button is-success" @click="tareNetwork">
+						<span class="icon"><i class="fa fa-play"></i></span>
+						<span>Tare networks</span>
+					</button>
+				</div>
+
+				<table class="table is-fullwidth">
+					<tr>
+						<th>Temperature</th>
+						<td>{{ temperature }}</td>
+					</tr>
+					<tr v-if="live_obs">
+						<th>Live duration</th>
+						<td>{{ live_obs_duration }} seconds</td>
+					</tr>
+					<tr v-for="(iface, name) in interfaces" v-key="name">
+						<td>
+							<b>Network</b><br>
+							<small>{{ name }}</small>
+						</td>
+						<td>
+							<p>
+								<i class="fa fa-exchange has-text-info"></i>
+								<b>{{ ((iface.d + iface.u) - (iface.td + iface.tu)).toLocaleString() }} MB</b>
+								<i class="fa fa-dot-circle-o has-text-grey" v-if="iface.td + iface.tu > 0"></i>
+							</p>
+							<p class="has-text-grey">
+								<i class="fa fa-arrow-down has-text-danger"></i>
+								{{ iface.d.toLocaleString() }} MB
+								<i class="fa fa-arrow-up has-text-link"></i>
+								{{ iface.u.toLocaleString() }} MB
+							</p>
+						</td>
+					</tr>
+				</table>
+			</section>
+		</div>
+
+		<script>
+			var app = new Vue({
+				el: '#app',
+
+				data: {
+					endpoint_encoder: '10.0.0.2:8080',
+					status: 'n/a',
+
+					toggleWaiting: false,
+
+					live_encoding: false,
+					live_obs: false,
+					live_obs_duration: 0,
+
+					temperature: 'n/a',
+					interfaces: {},
+
+					currentScene: false,
+					scenes: [],
+				},
+
+				methods: {
+					async api(path) {
+						let res = await fetch('http://' + this.endpoint_encoder + path);
+						let ret = await res.json();
+						return ret;
+					},
+
+					async refreshAll() {
+						this.status = 'Refreshing all..';
+
+						this.interfaces = {};
+
+						let scenes = await this.api('/api/scenes');
+						this.currentScene = scenes.currentProgramSceneName;
+						this.scenes = scenes.scenes;
+
+						await this.refresh();
+					},
+
+					async refresh() {
+						this.status = 'Refreshing..';
+
+						try {
+							let stats = await this.api('/api/stats');
+
+							this.live_encoding = stats.live_encoding;
+							this.live_obs = stats.live_obs;
+							this.live_obs_duration = stats.live_obs_duration;
+
+							this.temperature = stats.temp;
+							for (let name in stats.ifs) {
+								let obj = this.interfaces[name];
+								if (obj === undefined) {
+									this.interfaces[name] = stats.ifs[name];
+									this.interfaces[name].tu = 0;
+									this.interfaces[name].td = 0;
+								} else {
+									Object.assign(obj, stats.ifs[name]);
+								}
+							}
+						} catch (error) {
+							this.status = 'Error: ' + error;
+							return;
+						}
+
+						this.status = '';
+					},
+
+					async toggleEncoding() {
+						this.toggleWaiting = true;
+						try {
+							if (this.live_encoding) {
+								// Stop streaming
+								await this.api('/api/stop');
+							} else {
+								// Start streaming
+								await this.api('/api/start');
+							}
+							await this.refresh();
+						} catch (error) {
+							console.error('Unable to start stream!', error);
+						}
+						this.toggleWaiting = false;
+					},
+
+					async toggleOBS() {
+						this.toggleWaiting = true;
+						try {
+							if (this.live_obs) {
+								// Stop streaming
+								await this.api('/api/obs-stop');
+							} else {
+								// Start streaming
+								await this.api('/api/obs-start');
+							}
+							await this.refresh();
+						} catch (error) {
+							console.error('Unable to start stream!', error);
+						}
+						this.toggleWaiting = false;
+					},
+
+					async setScene(scene) {
+						this.currentScene = scene;
+						await this.api('/api/set-scene?scene=' + escape(scene));
+					},
+
+					tareNetwork() {
+						for (let name in this.interfaces) {
+							var obj = this.interfaces[name];
+							obj.td = obj.d;
+							obj.tu = obj.u;
+						}
+						this.$forceUpdate();
+					},
+				},
+
+				computed: {
+					streamEncodingButtonClasses() {
+						if (this.live_encoding) {
+							return 'button is-small is-danger';
+						} else {
+							return 'button is-small is-link';
+						}
+					},
+
+					streamEncodingButtonText() {
+						if (this.live_encoding) {
+							return 'Stop encoding';
+						} else {
+							return 'Start encoding';
+						}
+					},
+
+					streamOBSButtonClasses() {
+						if (this.live_obs) {
+							return 'button is-small is-danger';
+						} else {
+							return 'button is-small is-link';
+						}
+					},
+
+					streamOBSButtonText() {
+						if (this.live_obs) {
+							return 'Stop OBS';
+						} else {
+							return 'Start OBS';
+						}
+					},
+				},
+
+				mounted() {
+					setInterval(() => this.refresh(), 2000);
+					this.refreshAll();
+				},
+			});
+		</script>
+	</body>
+</html>

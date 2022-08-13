@@ -1,0 +1,6 @@
+{
+  "appId": "tools.nimble.irl",
+  "appName": "Nimble IRL",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
